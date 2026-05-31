@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 from typing import List
 import sys, os
 from tavily import TavilyClient
+from fastapi.middleware.cors import CORSMiddleware
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 load_dotenv()
@@ -15,6 +16,13 @@ from agents.portfolio_agent import portfolio_agent
 from agents.rag_agent import get_collection
 
 app = FastAPI(title="FinAgent Global API")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://finagent-ui.vercel.app", "http://localhost:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 class AnalyseRequest(BaseModel):
     ticker: str
