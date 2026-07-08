@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: finagent-api
+    runtime: python
+    repo: https://github.com/muralirevuri07-boop/finagent
+    branch: main
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m uvicorn api.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: GROQ_API_KEY
+        value: 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
+      - key: TAVILY_API_KEY
+        value: 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
+      - key: ALPHA_VANTAGE_API_KEY
+        value: 589J9FA0S60HIXN6
+      - key: LANGSMITH_API_KEY
+        value: lsv2_pt_aa21979daac46acaf2257fd7a923bd3_16fb5207ba
+      - key: LANGCHAIN_TRACING_V2
+        value: true
+      - key: LANGCHAIN_PROJECT
+        value: FinAgent
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: ENVIRONMENT
+        value: production
