@@ -81,6 +81,7 @@ async def rag_stats(ticker: str):
         return {"ticker": ticker.upper(), "total_embeddings": collection.count(), "status": "active"}
     except Exception as e:
         return {"ticker": ticker.upper(), "total_embeddings": 0, "status": str(e)}
+
 @app.get("/news/general")
 async def general_news():
     try:
@@ -122,6 +123,14 @@ async def stock_news(ticker: str):
         return {"news": news, "ticker": ticker}
     except Exception as e:
         return {"news": [], "error": str(e)}
+
 @app.get("/health")
 def health():
     return {"status": "FinAgent Global running 🚀"}
+
+# ===== ADD THIS BLOCK AT THE VERY END =====
+if __name__ == "__main__":
+    import uvicorn
+    import os
+    port = int(os.environ.get("PORT", 10000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
