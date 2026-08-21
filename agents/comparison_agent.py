@@ -38,7 +38,7 @@ def comparison_agent(state: dict) -> dict:
     
     stocks = [get_price_data(f"{t}{suffix}") for t in tickers]
     
-    llm = ChatGroq(model="llama-3.3-70b-versatile", api_key=os.getenv("GROQ_API_KEY"))
+    llm = ChatGroq(model="openai/gpt-oss-120b", api_key=os.getenv("GROQ_API_KEY"))
     prompt = f"""You are a senior analyst. Compare these stocks and pick the best investment.
 
 Stocks data: {json.dumps(stocks, indent=2)}

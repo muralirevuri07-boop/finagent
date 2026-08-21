@@ -37,7 +37,7 @@ def portfolio_agent(state: dict) -> dict:
         data["shares"]     = h.get("shares", 0)
         stocks.append(data)
 
-    llm = ChatGroq(model="llama-3.3-70b-versatile", api_key=os.getenv("GROQ_API_KEY"))
+    llm = ChatGroq(model="openai/gpt-oss-120b", api_key=os.getenv("GROQ_API_KEY"))
     prompt = f"""You are a portfolio manager. Analyse this portfolio and give recommendations.
 
 Portfolio: {json.dumps(stocks, indent=2)}

@@ -3,7 +3,7 @@ from langchain_core.messages import HumanMessage
 import os, json, re
 
 def report_agent(state: dict) -> dict:
-    llm = ChatGroq(model="llama-3.3-70b-versatile", api_key=os.getenv("GROQ_API_KEY"))
+    llm = ChatGroq(model="openai/gpt-oss-120b", api_key=os.getenv("GROQ_API_KEY"))
 
     rag_context = state.get("rag_context", {})
     historical  = rag_context.get("historical_news", [])
