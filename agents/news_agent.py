@@ -16,17 +16,14 @@ MARKET_CONTEXT = {
 }
 
 def news_agent(state: dict) -> dict:
-    client = TavilyClient(api_key=os.getenv("TAVILY_API_KEY"))
-    ticker = state["ticker"]
-    market = state.get("market", "US")
-    context = MARKET_CONTEXT.get(market, "stock market")
-
-    query = f"{ticker} {context} analysis news 2026"
-
-    results = client.search(
-        query=query,
-        max_results=5,
-        search_depth="advanced"
-    )
-    articles = [r["content"] for r in results["results"]]
+    try:
+        client = TavilyClient(api_key=os.getenv("TAVILY_API_KEY"))
+        ticker = state["ticker"]
+        market = state.get("market", "US")
+        context = MARKET_CONTEXT.get(market, "stock market")
+        query = f"{ticker} {context} analysis news 2026"
+        results = client.search(query=query, max_results=5, search_depth="advanced")
+        articles = [r["content"] for r in results["results"]]
+    except Exception:
+        articles = [f"Latest market analysis for {state['ticker']} - news unavailable, proceeding with financial data only."]
     return {**state, "news": articles}
