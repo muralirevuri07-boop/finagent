@@ -13,7 +13,6 @@ from graph.finagent_graph import finagent
 from agents.feargreed_agent import feargreed_agent
 from agents.comparison_agent import comparison_agent
 from agents.portfolio_agent import portfolio_agent
-from agents.rag_agent import get_collection
 
 app = FastAPI(title="FinAgent Global API")
 app.add_middleware(
@@ -134,3 +133,4 @@ if __name__ == "__main__":
     import os
     port = int(os.environ.get("PORT", 10000))
     uvicorn.run(app, host="0.0.0.0", port=port)
+
