@@ -1,6 +1,6 @@
 import os
 import chromadb
-from chromadb.utils import embedding_functions
+from chromadb.utils.embedding_functions import DefaultEmbeddingFunction
 from datetime import datetime
 
 # Initialize ChromaDB without loading the embedding model.
@@ -14,9 +14,7 @@ def get_embedding_function():
     global _embedding_fn
 
     if _embedding_fn is None:
-        _embedding_fn = embedding_functions.SentenceTransformerEmbeddingFunction(
-            model_name="all-MiniLM-L6-v2"
-        )
+        _embedding_fn = DefaultEmbeddingFunction()
 
     return _embedding_fn
 
@@ -107,3 +105,4 @@ def rag_agent(state: dict) -> dict:
         **state,
         "rag_context": rag_context
     }
+
