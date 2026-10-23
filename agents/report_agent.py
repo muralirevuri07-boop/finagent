@@ -1,6 +1,7 @@
 from langchain_groq import ChatGroq
 from langchain_core.messages import HumanMessage
 from agents.valuation_engine import compute_valuation
+from agents.signal_scorer import compute_signal_score
 import os, json, re
 
 
@@ -96,7 +97,19 @@ Rules:
         "rag_insight":  llm_out.get("rag_insight",   "No historical data available."),
     }
 
-    return {**state, "report": report, "valuation": valuation}
+    # ── 4. Signal score (quantitative, rule-based) ───────────────────────────
+    signal = compute_signal_score(
+        sentiment     = state.get("sentiment", {}),
+        valuation     = valuation,
+        financial_data= fin,
+    )
+    report["signal_score"]       = signal["score"]
+    report["signal_label"]       = signal["label"]
+    report["signal_tier"]        = signal["tier"]
+    report["signal_breakdown"]   = signal["breakdown"]
+    report["signal_explanation"] = signal["explanation"]
+
+    return {**state, "report": report, "valuation": valuation, "signal": signal}
 
 
 def _confidence(valuation: dict, sentiment: dict) -> str:

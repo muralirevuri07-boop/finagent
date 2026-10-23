@@ -14,7 +14,8 @@ class GraphState(TypedDict):
     financial_data: dict
     report:         dict
     rag_context:    dict
-    valuation:      dict   # added
+    valuation:      dict
+    signal:         dict
 
 def build_graph():
     graph = StateGraph(GraphState)
