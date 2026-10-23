@@ -10,6 +10,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 load_dotenv()
 
 from graph.finagent_graph import finagent
+from graph.copilot_graph import run_copilot
 from agents.feargreed_agent import feargreed_agent
 from agents.comparison_agent import comparison_agent
 from agents.portfolio_agent import portfolio_agent
@@ -131,6 +132,31 @@ async def stock_news(ticker: str):
 @app.get("/health")
 def health():
     return {"status": "FinAgent Global running 🚀"}
+
+
+# ── AI Research Copilot ───────────────────────────────────────────────────────
+
+class ResearchAskRequest(BaseModel):
+    ticker: str
+    market: str = "US"
+    question: str
+    session_id: str = ""
+
+
+@app.post("/research/ask")
+async def research_ask(req: ResearchAskRequest):
+    """
+    AI Research Copilot — answers natural-language financial research questions
+    with traceable, cited evidence.  Every source ID in the response
+    corresponds to a Source object in the `sources` list.
+    """
+    response = run_copilot(
+        question=req.question,
+        ticker=req.ticker.upper(),
+        market=req.market,
+        session_id=req.session_id or None,
+    )
+    return response.model_dump()
 
 # ===== ADD THIS BLOCK AT THE VERY END =====
 if __name__ == "__main__":
