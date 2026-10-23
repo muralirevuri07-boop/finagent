@@ -95,97 +95,215 @@ def get_yahoo_chart(symbol):
         return {"error": str(e), "price_history": [], "ohlc": {}}
 
 
+def _fetch_yahoo_summary(symbol: str) -> dict:
+    """
+    Fetch fundamentals directly from Yahoo Finance quoteSummary API.
+    More reliable than yf.Ticker().info which often returns empty on cloud IPs.
+    """
+    modules = "price,summaryDetail,defaultKeyStatistics,financialData,assetProfile,incomeStatementHistory,cashflowStatementHistory"
+    url = f"https://query1.finance.yahoo.com/v10/finance/quoteSummary/{symbol}?modules={modules}"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "application/json",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://finance.yahoo.com/",
+    }
+    try:
+        r = requests.get(url, headers=headers, timeout=15)
+        data = r.json()
+        result = data.get("quoteSummary", {}).get("result", [])
+        if not result:
+            return {}
+        return result[0]
+    except Exception:
+        return {}
+
+
+def _fetch_yahoo_summary_v11(symbol: str) -> dict:
+    """Fallback using v11 endpoint."""
+    modules = "price,summaryDetail,defaultKeyStatistics,financialData,assetProfile"
+    url = f"https://query1.finance.yahoo.com/v11/finance/quoteSummary/{symbol}?modules={modules}"
+    headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
+    try:
+        r = requests.get(url, headers=headers, timeout=15)
+        data = r.json()
+        result = data.get("quoteSummary", {}).get("result", [])
+        return result[0] if result else {}
+    except Exception:
+        return {}
+
+
+def _safe_mod(module: dict, key: str, fmt="raw"):
+    """Safely extract a value from a Yahoo quoteSummary module field."""
+    try:
+        field = module.get(key, {})
+        if isinstance(field, dict):
+            return field.get(fmt) or field.get("raw")
+        return field
+    except Exception:
+        return None
+
+
 def get_fundamentals(symbol, market):
-    """Fetch fundamentals via yfinance. Returns dict with N/A for missing fields."""
+    """Fetch fundamentals via Yahoo Finance quoteSummary API (direct HTTP).
+    Falls back to yfinance if API returns empty."""
     if market in NON_EQUITY_MARKETS:
         return {}
+
+    # ── Primary: direct Yahoo Finance quoteSummary ────────────────────────────
+    summary = _fetch_yahoo_summary(symbol)
+    if not summary:
+        summary = _fetch_yahoo_summary_v11(symbol)
+
+    price_mod    = summary.get("price", {})
+    fin_data_mod = summary.get("financialData", {})
+    key_stats    = summary.get("defaultKeyStatistics", {})
+    summary_det  = summary.get("summaryDetail", {})
+    profile_mod  = summary.get("assetProfile", {})
+    is_hist      = summary.get("incomeStatementHistory", {}).get("incomeStatementHistory", [])
+    cf_hist      = summary.get("cashflowStatementHistory", {}).get("cashflowStatementHistoryItems", []) or \
+                   summary.get("cashflowStatementHistory", {}).get("cashflowStatements", [])
+
+    # Revenue history from income statement
+    rev_history = []
     try:
-        t    = yf.Ticker(symbol)
-        info = t.info or {}
-
-        # Income statement — annual
-        try:
-            fin   = t.financials
-            rev   = None if fin is None or fin.empty else fin.loc["Total Revenue"].dropna()
-            eps_h = None if fin is None or fin.empty else fin.loc["Diluted EPS"].dropna() if "Diluted EPS" in fin.index else None
-        except Exception:
-            rev, eps_h = None, None
-
-        # Cash flow
-        try:
-            cf  = t.cashflow
-            fcf = None if cf is None or cf.empty else (
-                cf.loc["Free Cash Flow"].dropna()
-                if "Free Cash Flow" in cf.index else None
-            )
-        except Exception:
-            fcf = None
-
-        # Revenue history (last 4 years)
+        for stmt in is_hist:
+            yr = stmt.get("endDate", {}).get("fmt", "")[:4]
+            val = _safe_mod(stmt, "totalRevenue") or 0
+            if yr and val:
+                rev_history.append({"year": int(yr), "revenue": _fmt_large(val), "raw": float(val)})
+        rev_history = sorted(rev_history, key=lambda x: x["year"])
+    except Exception:
         rev_history = []
-        if rev is not None and len(rev) > 0:
-            for date, val in rev.items():
-                rev_history.append({
-                    "year":    date.year if hasattr(date, "year") else str(date)[:4],
-                    "revenue": _fmt_large(val),
-                    "raw":     float(val) if val else 0,
-                })
-            rev_history = sorted(rev_history, key=lambda x: x["year"])
 
-        # FCF history
+    # FCF history from cash flow statement
+    fcf_history = []
+    try:
+        for stmt in cf_hist:
+            yr = stmt.get("endDate", {}).get("fmt", "")[:4]
+            fcf_val = _safe_mod(stmt, "freeCashflow") or 0
+            if not fcf_val:
+                ops = _safe_mod(stmt, "totalCashFromOperatingActivities") or 0
+                cap = _safe_mod(stmt, "capitalExpenditures") or 0
+                fcf_val = ops + cap  # capex is usually negative
+            if yr and fcf_val:
+                fcf_history.append({"year": int(yr), "fcf": _fmt_large(fcf_val), "raw": float(fcf_val)})
+        fcf_history = sorted(fcf_history, key=lambda x: x["year"])
+    except Exception:
         fcf_history = []
-        if fcf is not None and len(fcf) > 0:
-            for date, val in fcf.items():
-                fcf_history.append({
-                    "year": date.year if hasattr(date, "year") else str(date)[:4],
-                    "fcf":  _fmt_large(val),
-                    "raw":  float(val) if val else 0,
-                })
-            fcf_history = sorted(fcf_history, key=lambda x: x["year"])
 
-        return {
-            # Valuation
-            "pe_ratio":         _safe(info.get("trailingPE")),
-            "forward_pe":       _safe(info.get("forwardPE")),
-            "price_to_book":    _safe(info.get("priceToBook")),
-            "ev_to_ebitda":     _safe(info.get("enterpriseToEbitda")),
-            # Size
-            "market_cap":       _fmt_large(info.get("marketCap")),
-            "enterprise_value": _fmt_large(info.get("enterpriseValue")),
-            # Earnings
-            "eps_ttm":          _safe(info.get("trailingEps")),
-            "eps_forward":      _safe(info.get("forwardEps")),
-            "revenue_ttm":      _fmt_large(info.get("totalRevenue")),
-            "revenue_growth":   f"{round(info.get('revenueGrowth',0)*100,1)}%"
-                                if info.get("revenueGrowth") is not None else "N/A",
-            "earnings_growth":  f"{round(info.get('earningsGrowth',0)*100,1)}%"
-                                if info.get("earningsGrowth") is not None else "N/A",
-            # Margins
-            "gross_margin":     f"{round(info.get('grossMargins',0)*100,1)}%"
-                                if info.get("grossMargins") is not None else "N/A",
-            "operating_margin": f"{round(info.get('operatingMargins',0)*100,1)}%"
-                                if info.get("operatingMargins") is not None else "N/A",
-            "net_margin":       f"{round(info.get('profitMargins',0)*100,1)}%"
-                                if info.get("profitMargins") is not None else "N/A",
-            # Balance sheet
-            "total_cash":       _fmt_large(info.get("totalCash")),
-            "total_debt":       _fmt_large(info.get("totalDebt")),
-            "free_cashflow":    _fmt_large(info.get("freeCashflow")),
-            "dividend_yield":   f"{round(info.get('dividendYield',0)*100,2)}%"
-                                if info.get("dividendYield") else "N/A",
-            "beta":             _safe(info.get("beta")),
-            "sector":           info.get("sector",  "N/A"),
-            "industry":         info.get("industry","N/A"),
-            # Histories for valuation engine
-            "revenue_history":  rev_history,
-            "fcf_history":      fcf_history,
-            "shares_outstanding": _safe(info.get("sharesOutstanding"), 0),
-            "total_cash_raw":   float(info.get("totalCash") or 0),
-            "total_debt_raw":   float(info.get("totalDebt") or 0),
-            "current_price_raw": float(info.get("currentPrice") or 0),
-        }
-    except Exception as e:
-        return {"fundamentals_error": str(e)}
+    # ── If direct API totally empty, fallback to yfinance ────────────────────
+    if not price_mod and not fin_data_mod:
+        try:
+            t = yf.Ticker(symbol)
+            info = t.fast_info if hasattr(t, "fast_info") else {}
+            full_info = {}
+            try:
+                full_info = t.info or {}
+            except Exception:
+                pass
+            info_dict = dict(full_info) if full_info else {}
+
+            if not info_dict:
+                return {}
+
+            # Build rev/fcf from yfinance as last resort
+            try:
+                fin = t.financials
+                rev_s = None if fin is None or fin.empty else fin.loc["Total Revenue"].dropna() if "Total Revenue" in fin.index else None
+                if rev_s is not None:
+                    for date, val in rev_s.items():
+                        yr = date.year if hasattr(date, "year") else int(str(date)[:4])
+                        rev_history.append({"year": yr, "revenue": _fmt_large(val), "raw": float(val)})
+                    rev_history = sorted(rev_history, key=lambda x: x["year"])
+            except Exception:
+                pass
+
+            try:
+                cf = t.cashflow
+                fcf_s = None if cf is None or cf.empty else cf.loc["Free Cash Flow"].dropna() if "Free Cash Flow" in cf.index else None
+                if fcf_s is not None:
+                    for date, val in fcf_s.items():
+                        yr = date.year if hasattr(date, "year") else int(str(date)[:4])
+                        fcf_history.append({"year": yr, "fcf": _fmt_large(val), "raw": float(val)})
+                    fcf_history = sorted(fcf_history, key=lambda x: x["year"])
+            except Exception:
+                pass
+
+            return {
+                "pe_ratio":         _safe(info_dict.get("trailingPE")),
+                "forward_pe":       _safe(info_dict.get("forwardPE")),
+                "price_to_book":    _safe(info_dict.get("priceToBook")),
+                "ev_to_ebitda":     _safe(info_dict.get("enterpriseToEbitda")),
+                "market_cap":       _fmt_large(info_dict.get("marketCap")),
+                "enterprise_value": _fmt_large(info_dict.get("enterpriseValue")),
+                "eps_ttm":          _safe(info_dict.get("trailingEps")),
+                "eps_forward":      _safe(info_dict.get("forwardEps")),
+                "revenue_ttm":      _fmt_large(info_dict.get("totalRevenue")),
+                "revenue_growth":   f"{round(info_dict.get('revenueGrowth',0)*100,1)}%" if info_dict.get("revenueGrowth") is not None else "N/A",
+                "earnings_growth":  f"{round(info_dict.get('earningsGrowth',0)*100,1)}%" if info_dict.get("earningsGrowth") is not None else "N/A",
+                "gross_margin":     f"{round(info_dict.get('grossMargins',0)*100,1)}%" if info_dict.get("grossMargins") is not None else "N/A",
+                "operating_margin": f"{round(info_dict.get('operatingMargins',0)*100,1)}%" if info_dict.get("operatingMargins") is not None else "N/A",
+                "net_margin":       f"{round(info_dict.get('profitMargins',0)*100,1)}%" if info_dict.get("profitMargins") is not None else "N/A",
+                "total_cash":       _fmt_large(info_dict.get("totalCash")),
+                "total_debt":       _fmt_large(info_dict.get("totalDebt")),
+                "free_cashflow":    _fmt_large(info_dict.get("freeCashflow")),
+                "dividend_yield":   f"{round(info_dict.get('dividendYield',0)*100,2)}%" if info_dict.get("dividendYield") else "N/A",
+                "beta":             _safe(info_dict.get("beta")),
+                "sector":           info_dict.get("sector", "N/A"),
+                "industry":         info_dict.get("industry", "N/A"),
+                "revenue_history":  rev_history,
+                "fcf_history":      fcf_history,
+                "shares_outstanding": _safe(info_dict.get("sharesOutstanding"), 0),
+                "total_cash_raw":   float(info_dict.get("totalCash") or 0),
+                "total_debt_raw":   float(info_dict.get("totalDebt") or 0),
+                "current_price_raw": float(info_dict.get("currentPrice") or 0),
+            }
+        except Exception as e:
+            return {"fundamentals_error": str(e)}
+
+    # ── Extract from direct API response ─────────────────────────────────────
+    def pct(mod, key):
+        v = _safe_mod(mod, key)
+        return f"{round(float(v)*100, 1)}%" if v is not None else "N/A"
+
+    market_cap_raw = _safe_mod(price_mod, "marketCap")
+    ev_raw         = _safe_mod(key_stats, "enterpriseValue")
+    shares_raw     = _safe_mod(key_stats, "sharesOutstanding")
+    cash_raw       = _safe_mod(fin_data_mod, "totalCash")
+    debt_raw       = _safe_mod(fin_data_mod, "totalDebt")
+    fcf_raw        = _safe_mod(fin_data_mod, "freeCashflow")
+
+    return {
+        "pe_ratio":         _safe(_safe_mod(summary_det, "trailingPE") or _safe_mod(key_stats, "forwardPE")),
+        "forward_pe":       _safe(_safe_mod(key_stats, "forwardPE")),
+        "price_to_book":    _safe(_safe_mod(key_stats, "priceToBook")),
+        "ev_to_ebitda":     _safe(_safe_mod(key_stats, "enterpriseToEbitda")),
+        "market_cap":       _fmt_large(market_cap_raw),
+        "enterprise_value": _fmt_large(ev_raw),
+        "eps_ttm":          _safe(_safe_mod(key_stats, "trailingEps")),
+        "eps_forward":      _safe(_safe_mod(key_stats, "forwardEps")),
+        "revenue_ttm":      _fmt_large(_safe_mod(fin_data_mod, "totalRevenue")),
+        "revenue_growth":   pct(fin_data_mod, "revenueGrowth"),
+        "earnings_growth":  pct(fin_data_mod, "earningsGrowth"),
+        "gross_margin":     pct(fin_data_mod, "grossMargins"),
+        "operating_margin": pct(fin_data_mod, "operatingMargins"),
+        "net_margin":       pct(fin_data_mod, "profitMargins"),
+        "total_cash":       _fmt_large(cash_raw),
+        "total_debt":       _fmt_large(debt_raw),
+        "free_cashflow":    _fmt_large(fcf_raw),
+        "dividend_yield":   pct(summary_det, "dividendYield"),
+        "beta":             _safe(_safe_mod(summary_det, "beta") or _safe_mod(key_stats, "beta")),
+        "sector":           profile_mod.get("sector", "N/A"),
+        "industry":         profile_mod.get("industry", "N/A"),
+        # Histories for valuation engine
+        "revenue_history":    rev_history,
+        "fcf_history":        fcf_history,
+        "shares_outstanding": _safe(shares_raw, 0),
+        "total_cash_raw":     float(cash_raw or 0),
+        "total_debt_raw":     float(debt_raw or 0),
+        "current_price_raw":  float(_safe_mod(price_mod, "regularMarketPrice") or 0),
+    }
 
 
 def financial_agent(state: dict) -> dict:
