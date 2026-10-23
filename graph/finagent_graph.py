@@ -7,22 +7,23 @@ from agents.report_agent import report_agent
 from agents.rag_agent import rag_agent
 
 class GraphState(TypedDict):
-    ticker: str
-    market: str
-    news: List[str]
-    sentiment: dict
+    ticker:         str
+    market:         str
+    news:           List[str]
+    sentiment:      dict
     financial_data: dict
-    report: dict
-    rag_context: dict
+    report:         dict
+    rag_context:    dict
+    valuation:      dict   # added
 
 def build_graph():
     graph = StateGraph(GraphState)
 
-    graph.add_node("news_scraper",      news_agent)
+    graph.add_node("news_scraper",       news_agent)
     graph.add_node("rag_store_retrieve", rag_agent)
-    graph.add_node("financial_data",    financial_agent)
+    graph.add_node("financial_data",     financial_agent)
     graph.add_node("sentiment_analyser", sentiment_agent)
-    graph.add_node("report_generator",  report_agent)
+    graph.add_node("report_generator",   report_agent)
 
     graph.set_entry_point("news_scraper")
     graph.add_edge("news_scraper",       "rag_store_retrieve")
