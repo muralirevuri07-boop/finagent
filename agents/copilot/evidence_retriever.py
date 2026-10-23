@@ -226,7 +226,7 @@ def _retrieve_financials(ticker: str, api_key: str) -> List[Source]:
     """Return income + cashflow Sources for the latest 2 reported periods."""
     sources: List[Source] = []
 
-    income_raw = _fmp_get(f"/income-statement/{ticker}?period=annual&limit=2", api_key)
+    income_raw = _fmp_get(f"/income-statement/{ticker}?period=annual&limit=10", api_key)
     if income_raw and isinstance(income_raw, list):
         for row in income_raw[:2]:
             period = row.get("calendarYear") or str(row.get("date", ""))[:4]
@@ -258,7 +258,7 @@ def _retrieve_financials(ticker: str, api_key: str) -> List[Source]:
                 validation_status=ValidationStatus.RETRIEVED,
             ))
 
-    cashflow_raw = _fmp_get(f"/cash-flow-statement/{ticker}?period=annual&limit=2", api_key)
+    cashflow_raw = _fmp_get(f"/cash-flow-statement/{ticker}?period=annual&limit=10", api_key)
     if cashflow_raw and isinstance(cashflow_raw, list):
         for row in cashflow_raw[:2]:
             period = row.get("calendarYear") or str(row.get("date", ""))[:4]
@@ -296,7 +296,7 @@ def _build_financial_facts(ticker: str, api_key: str) -> Dict[str, Any]:
     """Raw numeric dict for deterministic calculations."""
     facts: Dict[str, Any] = {}
 
-    income_raw = _fmp_get(f"/income-statement/{ticker}?period=annual&limit=3", api_key)
+    income_raw = _fmp_get(f"/income-statement/{ticker}?period=annual&limit=10", api_key)
     if income_raw and isinstance(income_raw, list) and len(income_raw) >= 1:
         rows = income_raw  # newest first
         facts["income"] = [
