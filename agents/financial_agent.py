@@ -50,9 +50,72 @@ def _safe(value, decimals=2):
         return "N/A"
 
 
+def _fetch_fmp_quote(symbol: str, api_key: str) -> dict:
+    """
+    Fetch current price/quote data from FMP /quote endpoint.
+    Returns price, change%, 52w range, day range, volume, company name — all in one call.
+    Reliable from datacenter IPs (API key auth, not scraping).
+    """
+    if not api_key:
+        return {}
+    base = "https://financialmodelingprep.com/stable"
+    headers = {"User-Agent": "FinAgent/1.0"}
+    try:
+        url = f"{base}/quote/{symbol}?apikey={api_key}"
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode())
+        q = data[0] if isinstance(data, list) and data else {}
+        if not q:
+            return {}
+
+        price   = q.get("price") or q.get("previousClose")
+        prev    = q.get("previousClose") or price
+        chg_pct = q.get("changesPercentage")
+
+        return {
+            "current_price":  round(float(price), 4) if price else 0,
+            "change_percent": f"{round(float(chg_pct), 2)}%" if chg_pct is not None else "N/A",
+            "52w_high":       q.get("yearHigh",  "N/A"),
+            "52w_low":        q.get("yearLow",   "N/A"),
+            "day_high":       q.get("dayHigh",   "N/A"),
+            "day_low":        q.get("dayLow",    "N/A"),
+            "volume":         q.get("volume",    "N/A"),
+            "company_name":   q.get("name", symbol),
+            "exchange":       q.get("exchange", ""),
+        }
+    except Exception:
+        return {}
+
+
+def _fetch_fmp_price_history(symbol: str, api_key: str) -> list:
+    """
+    Fetch ~30 days of daily closing prices from FMP for the price chart.
+    Uses /historical-price-eod/light/{symbol}?limit=30
+    """
+    if not api_key:
+        return []
+    base = "https://financialmodelingprep.com/stable"
+    headers = {"User-Agent": "FinAgent/1.0"}
+    try:
+        url = f"{base}/historical-price-eod/light/{symbol}?limit=30&apikey={api_key}"
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode())
+        # FMP returns newest-first; reverse to oldest-first for charting
+        if isinstance(data, list):
+            prices = [round(float(d["close"]), 4) for d in reversed(data) if d.get("close")]
+            return prices
+        return []
+    except Exception:
+        return []
+
+
 def get_yahoo_chart(symbol):
-    """Fetch price/OHLC data from Yahoo Finance chart API."""
+    """Fetch price/OHLC data from Yahoo Finance chart API with FMP fallback."""
     headers = {"User-Agent": "Mozilla/5.0"}
+    fmp_key = os.getenv("FMP_API_KEY", "")
+
     try:
         url = (
             f"https://query1.finance.yahoo.com/v8/finance/chart/"
@@ -84,6 +147,7 @@ def get_yahoo_chart(symbol):
             "day_low":        meta.get("regularMarketDayLow", "N/A"),
             "volume":         meta.get("regularMarketVolume", "N/A"),
             "company_name":   meta.get("longName", symbol),
+            "exchange":       meta.get("exchangeName", ""),
             "price_history":  price_history,
             "ohlc": {
                 "open":   clean(quotes.get("open",   [])),
@@ -94,8 +158,20 @@ def get_yahoo_chart(symbol):
                            for v in quotes.get("volume", [])],
             },
         }
-    except Exception as e:
-        return {"error": str(e), "price_history": [], "ohlc": {}}
+    except Exception:
+        pass  # fall through to FMP
+
+    # ── FMP fallback for chart data ────────────────────────────────────────────
+    fmp_q = _fetch_fmp_quote(symbol, fmp_key)
+    if fmp_q:
+        price_history = _fetch_fmp_price_history(symbol, fmp_key)
+        return {
+            **fmp_q,
+            "price_history": price_history,
+            "ohlc": {},
+        }
+
+    return {"price_history": [], "ohlc": {}}
 
 
 def _fetch_yahoo_summary(symbol: str) -> dict:
@@ -354,6 +430,9 @@ def _fetch_fmp_fundamentals(symbol: str, market: str) -> dict:
         "total_cash_raw":   float(total_cash or 0),
         "total_debt_raw":   float(total_debt or 0),
         "current_price_raw": float(price or 0),
+        # Company identity — useful if chart fetch fails
+        "company_name":     profile.get("companyName") or profile.get("name") or "",
+        "exchange":         profile.get("exchangeShortName") or profile.get("exchange") or "",
     }
 
 
@@ -597,7 +676,8 @@ def financial_agent(state: dict) -> dict:
         "currency":      currency,
         "market":        market,
         "market_label":  config["label"],
-        "company_name":  chart.get("company_name", symbol),
+        "company_name":  chart.get("company_name") or fundas.get("company_name") or symbol,
+        "exchange":      chart.get("exchange") or fundas.get("exchange") or config["label"],
         "current_price": f"{currency}{chart.get('current_price','N/A')}",
         "current_price_raw": chart.get("current_price", 0),
         "change_percent":    chart.get("change_percent","N/A"),
