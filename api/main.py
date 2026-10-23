@@ -14,8 +14,10 @@ from graph.copilot_graph import run_copilot
 from agents.feargreed_agent import feargreed_agent
 from agents.comparison_agent import comparison_agent
 from agents.portfolio_agent import portfolio_agent
+from agents.portfolio import router as portfolio_router
 
 app = FastAPI(title="FinAgent Global API")
+app.include_router(portfolio_router)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["https://finagent-ui.vercel.app", "http://localhost:3000"],
