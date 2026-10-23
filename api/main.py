@@ -45,7 +45,8 @@ async def analyse(req: AnalyseRequest):
         "ticker": req.ticker.upper(),
         "market": req.market,
         "news": [], "sentiment": {}, "financial_data": {},
-        "report": {}, "rag_context": {}, "valuation": {}, "signal": {}
+        "report": {}, "rag_context": {}, "valuation": {}, "signal": {},
+        "historical_financials": {}
     }
     result = finagent.invoke(initial_state)
     return {
@@ -55,8 +56,9 @@ async def analyse(req: AnalyseRequest):
         "financial_data": result["financial_data"],
         "report":         result["report"],
         "rag_context":    result["rag_context"],
-        "valuation":      result.get("valuation", {}),
-        "signal":         result.get("signal", {}),
+        "valuation":              result.get("valuation", {}),
+        "signal":                 result.get("signal", {}),
+        "historical_financials":  result.get("historical_financials", {}),
     }
 
 @app.get("/feargreed")

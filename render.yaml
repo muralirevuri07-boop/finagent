@@ -23,3 +23,5 @@ services:
         value: 3.11.0
       - key: ENVIRONMENT
         value: production
+      - key: FMP_API_KEY
+        value: rxU17dwRvRRvuRBL1h6lKZb5gg4Kc5Rx
