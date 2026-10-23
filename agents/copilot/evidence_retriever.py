@@ -53,13 +53,15 @@ def _truncate(text: str, max_len: int = 500) -> str:
 
 
 def _fmp_get(path: str, api_key: str) -> Any:
+    import logging
     sep = "&" if "?" in path else "?"
     url = f"{FMP_BASE}{path}{sep}apikey={api_key}"
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "FinAgent/1.0"})
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with urllib.request.urlopen(req, timeout=15) as resp:
             return json.loads(resp.read().decode())
-    except Exception:
+    except Exception as e:
+        logging.warning(f"[copilot] FMP request failed: {path} — {type(e).__name__}: {e}")
         return None
 
 
