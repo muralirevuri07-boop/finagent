@@ -133,6 +133,40 @@ def _fetch_yahoo_summary_v11(symbol: str) -> dict:
         return {}
 
 
+def _fetch_yahoo_v7_quote(symbol: str) -> dict:
+    """
+    Fetch fundamentals from Yahoo Finance v7 quote endpoint.
+    This is the same endpoint Yahoo Finance's own website uses — very reliable.
+    Returns a flat dict of fundamental fields.
+    """
+    fields = ",".join([
+        "regularMarketPrice", "marketCap", "trailingPE", "forwardPE",
+        "trailingEps", "forwardEps", "priceToBook", "bookValue",
+        "enterpriseValue", "enterpriseToEbitda", "fiftyDayAverage",
+        "beta", "dividendYield", "totalRevenue", "grossMargins",
+        "operatingMargins", "profitMargins", "freeCashflow",
+        "totalCash", "totalDebt", "sharesOutstanding",
+        "revenueGrowth", "earningsGrowth", "sector", "industry",
+        "longName", "shortName",
+    ])
+    for host in ["query1", "query2"]:
+        url = f"https://{host}.finance.yahoo.com/v7/finance/quote?symbols={symbol}&fields={fields}"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept": "application/json",
+            "Referer": "https://finance.yahoo.com/",
+        }
+        try:
+            r = requests.get(url, headers=headers, timeout=12)
+            data = r.json()
+            results = data.get("quoteResponse", {}).get("result", [])
+            if results:
+                return results[0]
+        except Exception:
+            continue
+    return {}
+
+
 def _safe_mod(module: dict, key: str, fmt="raw"):
     """Safely extract a value from a Yahoo quoteSummary module field."""
     try:
@@ -150,7 +184,10 @@ def get_fundamentals(symbol, market):
     if market in NON_EQUITY_MARKETS:
         return {}
 
-    # ── Primary: direct Yahoo Finance quoteSummary ────────────────────────────
+    # ── Primary: Yahoo Finance v7/quote (fastest, same as Yahoo website) ─────
+    v7 = _fetch_yahoo_v7_quote(symbol)
+
+    # ── Secondary: quoteSummary for deeper data (income/cashflow history) ────
     summary = _fetch_yahoo_summary(symbol)
     if not summary:
         summary = _fetch_yahoo_summary_v11(symbol)
@@ -192,8 +229,49 @@ def get_fundamentals(symbol, market):
     except Exception:
         fcf_history = []
 
+    # ── If v7 has data and quoteSummary is empty, build from v7 ─────────────
+    if v7 and not price_mod and not fin_data_mod:
+        def pct_v7(key):
+            v = v7.get(key)
+            return f"{round(float(v)*100, 1)}%" if v is not None else "N/A"
+
+        shares_v7 = v7.get("sharesOutstanding")
+        cash_v7   = v7.get("totalCash")
+        debt_v7   = v7.get("totalDebt")
+        fcf_v7    = v7.get("freeCashflow")
+
+        return {
+            "pe_ratio":         _safe(v7.get("trailingPE")),
+            "forward_pe":       _safe(v7.get("forwardPE")),
+            "price_to_book":    _safe(v7.get("priceToBook")),
+            "ev_to_ebitda":     _safe(v7.get("enterpriseToEbitda")),
+            "market_cap":       _fmt_large(v7.get("marketCap")),
+            "enterprise_value": _fmt_large(v7.get("enterpriseValue")),
+            "eps_ttm":          _safe(v7.get("trailingEps")),
+            "eps_forward":      _safe(v7.get("forwardEps")),
+            "revenue_ttm":      _fmt_large(v7.get("totalRevenue")),
+            "revenue_growth":   pct_v7("revenueGrowth"),
+            "earnings_growth":  pct_v7("earningsGrowth"),
+            "gross_margin":     pct_v7("grossMargins"),
+            "operating_margin": pct_v7("operatingMargins"),
+            "net_margin":       pct_v7("profitMargins"),
+            "total_cash":       _fmt_large(cash_v7),
+            "total_debt":       _fmt_large(debt_v7),
+            "free_cashflow":    _fmt_large(fcf_v7),
+            "dividend_yield":   pct_v7("dividendYield"),
+            "beta":             _safe(v7.get("beta")),
+            "sector":           v7.get("sector", "N/A"),
+            "industry":         v7.get("industry", "N/A"),
+            "revenue_history":  rev_history,
+            "fcf_history":      fcf_history,
+            "shares_outstanding": _safe(shares_v7, 0),
+            "total_cash_raw":   float(cash_v7 or 0),
+            "total_debt_raw":   float(debt_v7 or 0),
+            "current_price_raw": float(v7.get("regularMarketPrice") or 0),
+        }
+
     # ── If direct API totally empty, fallback to yfinance ────────────────────
-    if not price_mod and not fin_data_mod:
+    if not price_mod and not fin_data_mod and not v7:
         try:
             t = yf.Ticker(symbol)
             info = t.fast_info if hasattr(t, "fast_info") else {}
@@ -262,47 +340,60 @@ def get_fundamentals(symbol, market):
         except Exception as e:
             return {"fundamentals_error": str(e)}
 
-    # ── Extract from direct API response ─────────────────────────────────────
+    # ── Extract from quoteSummary + v7 merged ────────────────────────────────
     def pct(mod, key):
         v = _safe_mod(mod, key)
         return f"{round(float(v)*100, 1)}%" if v is not None else "N/A"
 
-    market_cap_raw = _safe_mod(price_mod, "marketCap")
-    ev_raw         = _safe_mod(key_stats, "enterpriseValue")
-    shares_raw     = _safe_mod(key_stats, "sharesOutstanding")
-    cash_raw       = _safe_mod(fin_data_mod, "totalCash")
-    debt_raw       = _safe_mod(fin_data_mod, "totalDebt")
-    fcf_raw        = _safe_mod(fin_data_mod, "freeCashflow")
+    # v7 as a fallback for each field when quoteSummary is empty
+    def _first(*vals):
+        for v in vals:
+            if v is not None and v != "N/A" and v != 0 and v != "0" and v != "":
+                return v
+        return None
+
+    market_cap_raw = _first(_safe_mod(price_mod, "marketCap"),       v7.get("marketCap"))
+    ev_raw         = _first(_safe_mod(key_stats, "enterpriseValue"),  v7.get("enterpriseValue"))
+    shares_raw     = _first(_safe_mod(key_stats, "sharesOutstanding"),v7.get("sharesOutstanding"))
+    cash_raw       = _first(_safe_mod(fin_data_mod, "totalCash"),     v7.get("totalCash"))
+    debt_raw       = _first(_safe_mod(fin_data_mod, "totalDebt"),     v7.get("totalDebt"))
+    fcf_raw        = _first(_safe_mod(fin_data_mod, "freeCashflow"),  v7.get("freeCashflow"))
+
+    def pct_first(mod, key, v7key=None):
+        v = _safe_mod(mod, key)
+        if v is None and v7key:
+            v = v7.get(v7key)
+        return f"{round(float(v)*100, 1)}%" if v is not None else "N/A"
 
     return {
-        "pe_ratio":         _safe(_safe_mod(summary_det, "trailingPE") or _safe_mod(key_stats, "forwardPE")),
-        "forward_pe":       _safe(_safe_mod(key_stats, "forwardPE")),
-        "price_to_book":    _safe(_safe_mod(key_stats, "priceToBook")),
-        "ev_to_ebitda":     _safe(_safe_mod(key_stats, "enterpriseToEbitda")),
+        "pe_ratio":         _safe(_first(_safe_mod(summary_det, "trailingPE"), v7.get("trailingPE"))),
+        "forward_pe":       _safe(_first(_safe_mod(key_stats, "forwardPE"),    v7.get("forwardPE"))),
+        "price_to_book":    _safe(_first(_safe_mod(key_stats, "priceToBook"),  v7.get("priceToBook"))),
+        "ev_to_ebitda":     _safe(_first(_safe_mod(key_stats, "enterpriseToEbitda"), v7.get("enterpriseToEbitda"))),
         "market_cap":       _fmt_large(market_cap_raw),
         "enterprise_value": _fmt_large(ev_raw),
-        "eps_ttm":          _safe(_safe_mod(key_stats, "trailingEps")),
-        "eps_forward":      _safe(_safe_mod(key_stats, "forwardEps")),
-        "revenue_ttm":      _fmt_large(_safe_mod(fin_data_mod, "totalRevenue")),
-        "revenue_growth":   pct(fin_data_mod, "revenueGrowth"),
-        "earnings_growth":  pct(fin_data_mod, "earningsGrowth"),
-        "gross_margin":     pct(fin_data_mod, "grossMargins"),
-        "operating_margin": pct(fin_data_mod, "operatingMargins"),
-        "net_margin":       pct(fin_data_mod, "profitMargins"),
+        "eps_ttm":          _safe(_first(_safe_mod(key_stats, "trailingEps"),  v7.get("trailingEps"))),
+        "eps_forward":      _safe(_first(_safe_mod(key_stats, "forwardEps"),   v7.get("forwardEps"))),
+        "revenue_ttm":      _fmt_large(_first(_safe_mod(fin_data_mod, "totalRevenue"), v7.get("totalRevenue"))),
+        "revenue_growth":   pct_first(fin_data_mod, "revenueGrowth",   "revenueGrowth"),
+        "earnings_growth":  pct_first(fin_data_mod, "earningsGrowth",  "earningsGrowth"),
+        "gross_margin":     pct_first(fin_data_mod, "grossMargins",    "grossMargins"),
+        "operating_margin": pct_first(fin_data_mod, "operatingMargins","operatingMargins"),
+        "net_margin":       pct_first(fin_data_mod, "profitMargins",   "profitMargins"),
         "total_cash":       _fmt_large(cash_raw),
         "total_debt":       _fmt_large(debt_raw),
         "free_cashflow":    _fmt_large(fcf_raw),
-        "dividend_yield":   pct(summary_det, "dividendYield"),
-        "beta":             _safe(_safe_mod(summary_det, "beta") or _safe_mod(key_stats, "beta")),
-        "sector":           profile_mod.get("sector", "N/A"),
-        "industry":         profile_mod.get("industry", "N/A"),
+        "dividend_yield":   pct_first(summary_det, "dividendYield",    "dividendYield"),
+        "beta":             _safe(_first(_safe_mod(summary_det, "beta"), _safe_mod(key_stats, "beta"), v7.get("beta"))),
+        "sector":           profile_mod.get("sector") or v7.get("sector", "N/A"),
+        "industry":         profile_mod.get("industry") or v7.get("industry", "N/A"),
         # Histories for valuation engine
         "revenue_history":    rev_history,
         "fcf_history":        fcf_history,
         "shares_outstanding": _safe(shares_raw, 0),
         "total_cash_raw":     float(cash_raw or 0),
         "total_debt_raw":     float(debt_raw or 0),
-        "current_price_raw":  float(_safe_mod(price_mod, "regularMarketPrice") or 0),
+        "current_price_raw":  float(_first(_safe_mod(price_mod, "regularMarketPrice"), v7.get("regularMarketPrice")) or 0),
     }
 
 
