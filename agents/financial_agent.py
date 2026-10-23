@@ -1,6 +1,9 @@
 import requests
 import yfinance as yf
 from datetime import datetime
+import os
+import urllib.request
+import json
 
 MARKET_CONFIG = {
     "US":        {"suffix": "",     "currency": "$",   "label": "🇺🇸 US"},
@@ -178,13 +181,194 @@ def _safe_mod(module: dict, key: str, fmt="raw"):
         return None
 
 
+def _fetch_fmp_fundamentals(symbol: str, market: str) -> dict:
+    """
+    Fetch fundamentals from Financial Modeling Prep API.
+    Uses /profile and /key-metrics endpoints — proper API key auth, no scraping.
+    Works reliably from cloud/datacenter IPs unlike Yahoo Finance.
+    """
+    api_key = os.getenv("FMP_API_KEY", "")
+    if not api_key:
+        return {}
+
+    # Map yfinance symbol to FMP symbol (strip .NS/.BO etc for FMP format)
+    fmp_sym = symbol.upper()
+    # FMP uses same suffixes as yfinance for non-US
+    SUFFIX_MAP = {
+        ".L": ".L", ".DE": ".DE", ".T": ".T",
+        ".HK": ".HK", ".SI": ".SI", ".NS": ".NS", ".BO": ".BO",
+    }
+    # symbol already has suffix from MARKET_CONFIG — pass through
+
+    base = "https://financialmodelingprep.com/stable"
+    headers = {"User-Agent": "FinAgent/1.0"}
+
+    def fmp_get(path):
+        sep = "&" if "?" in path else "?"
+        url = f"{base}{path}{sep}apikey={api_key}"
+        try:
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode())
+            return data if isinstance(data, list) else ([data] if isinstance(data, dict) else [])
+        except Exception:
+            return []
+
+    # /profile — company info, market cap, beta, sector, PE, EPS, shares
+    profile_data = fmp_get(f"/profile/{fmp_sym}")
+    profile = profile_data[0] if profile_data else {}
+
+    # /key-metrics — margins, FCF, EV/EBITDA, revenue (TTM)
+    metrics_data = fmp_get(f"/key-metrics/{fmp_sym}?period=annual&limit=1")
+    metrics = metrics_data[0] if metrics_data else {}
+
+    # /income-statement for revenue history
+    is_data = fmp_get(f"/income-statement/{fmp_sym}?period=annual&limit=5")
+    # /cash-flow-statement for FCF history
+    cf_data = fmp_get(f"/cash-flow-statement/{fmp_sym}?period=annual&limit=5")
+
+    if not profile:
+        return {}
+
+    # Build revenue history
+    rev_history = []
+    for stmt in reversed(is_data):  # oldest first
+        try:
+            yr = str(stmt.get("date", ""))[:4]
+            val = stmt.get("revenue") or 0
+            if yr and val:
+                rev_history.append({"year": int(yr), "revenue": _fmt_large(val), "raw": float(val)})
+        except Exception:
+            pass
+
+    # Build FCF history
+    fcf_history = []
+    for stmt in reversed(cf_data):
+        try:
+            yr = str(stmt.get("date", ""))[:4]
+            fcf_val = stmt.get("freeCashFlow") or 0
+            if yr and fcf_val:
+                fcf_history.append({"year": int(yr), "fcf": _fmt_large(fcf_val), "raw": float(fcf_val)})
+        except Exception:
+            pass
+
+    def _p(val):
+        """Format percentage from decimal (0.65 → 65.0%)"""
+        try:
+            return f"{round(float(val)*100, 1)}%" if val is not None else "N/A"
+        except Exception:
+            return "N/A"
+
+    def _pv(val):
+        """Format percentage value that's already * 100 (e.g. from FMP profile)"""
+        try:
+            return f"{round(float(val), 1)}%" if val is not None else "N/A"
+        except Exception:
+            return "N/A"
+
+    # FMP profile fields
+    market_cap      = profile.get("mktCap") or profile.get("marketCap")
+    beta            = profile.get("beta")
+    sector          = profile.get("sector", "N/A")
+    industry        = profile.get("industry", "N/A")
+    pe_ttm          = profile.get("pe")
+    eps_ttm         = profile.get("eps")
+    shares          = profile.get("sharesOutstanding") or profile.get("shares")
+    price           = profile.get("price")
+    ev              = profile.get("enterpriseValue") or metrics.get("enterpriseValue")
+
+    # FMP key-metrics (latest annual)
+    # These may be annual, not TTM — use as best available
+    gross_margin    = metrics.get("grossProfitMargin") or profile.get("grossProfitTTM") and None
+    op_margin       = metrics.get("operatingProfitMargin") or metrics.get("operatingIncomePerShare") and None
+    net_margin      = metrics.get("netProfitMargin")
+    ev_ebitda       = metrics.get("enterpriseValueOverEBITDA")
+    pb              = metrics.get("pbRatio") or profile.get("priceToBook")
+    forward_pe      = metrics.get("peRatio")  # annual key-metrics PE
+    fwd_eps         = None  # FMP free tier doesn't reliably have forward EPS
+    revenue_ttm     = profile.get("revenueTTM") or (is_data[0].get("revenue") if is_data else None)
+    fcf_ttm         = profile.get("freeCashFlowTTM") or (cf_data[0].get("freeCashFlow") if cf_data else None)
+    total_cash      = profile.get("cash") or (cf_data[0].get("cashAtEndOfPeriod") if cf_data else None)
+    total_debt      = profile.get("totalDebt") or (is_data[0].get("totalDebt") if is_data else None)
+    div_yield       = profile.get("lastDiv")  # FMP gives dividend amount, not yield — skip
+
+    # Revenue/earnings growth (compare latest 2 years)
+    rev_growth = "N/A"
+    earn_growth = "N/A"
+    try:
+        if len(is_data) >= 2:
+            r0 = float(is_data[0].get("revenue") or 0)
+            r1 = float(is_data[1].get("revenue") or 0)
+            if r1:
+                rev_growth = f"{round((r0/r1-1)*100, 1)}%"
+            e0 = float(is_data[0].get("netIncome") or 0)
+            e1 = float(is_data[1].get("netIncome") or 0)
+            if e1:
+                earn_growth = f"{round((e0/e1-1)*100, 1)}%"
+    except Exception:
+        pass
+
+    # Gross margin from income statement (more reliable)
+    gross_margin_pct = "N/A"
+    op_margin_pct = "N/A"
+    net_margin_pct = "N/A"
+    try:
+        if is_data:
+            latest = is_data[0]
+            rev = float(latest.get("revenue") or 0)
+            if rev:
+                gp = float(latest.get("grossProfit") or 0)
+                oi = float(latest.get("operatingIncome") or 0)
+                ni = float(latest.get("netIncome") or 0)
+                gross_margin_pct = f"{round(gp/rev*100, 1)}%" if gp else "N/A"
+                op_margin_pct    = f"{round(oi/rev*100, 1)}%" if oi else "N/A"
+                net_margin_pct   = f"{round(ni/rev*100, 1)}%" if ni else "N/A"
+    except Exception:
+        pass
+
+    return {
+        "pe_ratio":         _safe(pe_ttm),
+        "forward_pe":       _safe(forward_pe),
+        "price_to_book":    _safe(pb),
+        "ev_to_ebitda":     _safe(ev_ebitda),
+        "market_cap":       _fmt_large(market_cap),
+        "enterprise_value": _fmt_large(ev),
+        "eps_ttm":          _safe(eps_ttm),
+        "eps_forward":      "N/A",
+        "revenue_ttm":      _fmt_large(revenue_ttm),
+        "revenue_growth":   rev_growth,
+        "earnings_growth":  earn_growth,
+        "gross_margin":     gross_margin_pct,
+        "operating_margin": op_margin_pct,
+        "net_margin":       net_margin_pct,
+        "total_cash":       _fmt_large(total_cash),
+        "total_debt":       _fmt_large(total_debt),
+        "free_cashflow":    _fmt_large(fcf_ttm),
+        "dividend_yield":   "N/A",
+        "beta":             _safe(beta),
+        "sector":           sector or "N/A",
+        "industry":         industry or "N/A",
+        "revenue_history":  rev_history,
+        "fcf_history":      fcf_history,
+        "shares_outstanding": _safe(shares, 0),
+        "total_cash_raw":   float(total_cash or 0),
+        "total_debt_raw":   float(total_debt or 0),
+        "current_price_raw": float(price or 0),
+    }
+
+
 def get_fundamentals(symbol, market):
-    """Fetch fundamentals via Yahoo Finance quoteSummary API (direct HTTP).
-    Falls back to yfinance if API returns empty."""
+    """Fetch fundamentals via FMP API (primary) then Yahoo Finance fallbacks.
+    FMP works reliably from cloud IPs; Yahoo Finance often blocks datacenter IPs."""
     if market in NON_EQUITY_MARKETS:
         return {}
 
-    # ── Primary: Yahoo Finance v7/quote (fastest, same as Yahoo website) ─────
+    # ── PRIMARY: FMP API — reliable from cloud IPs, uses API key (no scraping) ─
+    fmp_data = _fetch_fmp_fundamentals(symbol, market)
+    if fmp_data and fmp_data.get("market_cap") not in (None, "N/A"):
+        return fmp_data
+
+    # ── FALLBACK: Yahoo Finance v7/quote ─────────────────────────────────────
     v7 = _fetch_yahoo_v7_quote(symbol)
 
     # ── Secondary: quoteSummary for deeper data (income/cashflow history) ────
