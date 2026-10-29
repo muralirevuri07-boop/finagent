@@ -8,13 +8,13 @@ services:
     startCommand: python -m uvicorn api.main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: GROQ_API_KEY
-        value: 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
+        sync: false
       - key: TAVILY_API_KEY
-        value: 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
+        sync: false
       - key: ALPHA_VANTAGE_API_KEY
-        value: 589J9FA0S60HIXN6
+        sync: false
       - key: LANGSMITH_API_KEY
-        value: lsv2_pt_aa21979daac46acaf2257fd7a923bd3_16fb5207ba
+        sync: false
       - key: LANGCHAIN_TRACING_V2
         value: true
       - key: LANGCHAIN_PROJECT
@@ -24,4 +24,4 @@ services:
       - key: ENVIRONMENT
         value: production
       - key: FMP_API_KEY
-        value: rxU17dwRvRRvuRBL1h6lKZb5gg4Kc5Rx
+        sync: false
