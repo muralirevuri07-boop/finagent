@@ -5,7 +5,7 @@ from agents.sentiment_agent import sentiment_agent
 from agents.financial_agent import financial_agent
 from agents.report_agent import report_agent
 from agents.rag_agent import rag_agent
-from agents.historical_financials_agent import historical_financials_agent
+from agents.historical_financials_agent import historical_financials_agent_global as historical_financials_agent
 
 class GraphState(TypedDict):
     ticker:                 str

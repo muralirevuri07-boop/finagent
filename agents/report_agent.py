@@ -62,7 +62,7 @@ Rules:
 - If valuation is unavailable, base recommendation on sentiment and fundamentals only"""
 
     try:
-        llm = ChatGroq(model="llama-3.3-70b-versatile", api_key=os.getenv("GROQ_API_KEY"))
+        llm = ChatGroq(model="llama-3.1-8b-instant", api_key=os.getenv("GROQ_API_KEY"))
         response = llm.invoke([HumanMessage(content=prompt)])
         raw   = response.content
         raw   = re.sub(r"```(?:json)?\s*", "", raw).strip()

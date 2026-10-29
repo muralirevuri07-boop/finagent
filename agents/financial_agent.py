@@ -436,19 +436,99 @@ def _fetch_fmp_fundamentals(symbol: str, market: str) -> dict:
     }
 
 
+def _fetch_alpha_vantage_overview(symbol: str) -> dict:
+    """
+    Fetch company overview from Alpha Vantage OVERVIEW endpoint.
+    Covers US and some international stocks. Returns key fundamentals.
+    Works reliably from cloud IPs (API key auth).
+    """
+    api_key = os.getenv("ALPHA_VANTAGE_API_KEY", "")
+    if not api_key:
+        return {}
+    # Alpha Vantage uses plain ticker for US; for NSE/BSE strip suffix
+    av_sym = symbol.split(".")[0] if "." in symbol else symbol
+    url = f"https://www.alphavantage.co/query?function=OVERVIEW&symbol={av_sym}&apikey={api_key}"
+    try:
+        r = requests.get(url, timeout=12)
+        d = r.json()
+        if not d or "Symbol" not in d:
+            return {}
+
+        def _av_pct(key):
+            v = d.get(key, "None")
+            try:
+                return f"{round(float(v)*100, 1)}%" if v not in (None, "None", "-") else "N/A"
+            except Exception:
+                try:
+                    return f"{round(float(v.strip('%')), 1)}%" if "%" in str(v) else "N/A"
+                except Exception:
+                    return "N/A"
+
+        def _av_safe(key):
+            v = d.get(key, "None")
+            try:
+                return round(float(v), 2) if v not in (None, "None", "-") else "N/A"
+            except Exception:
+                return "N/A"
+
+        def _av_large(key):
+            v = d.get(key, "None")
+            try:
+                return _fmt_large(float(v)) if v not in (None, "None", "-") else "N/A"
+            except Exception:
+                return "N/A"
+
+        return {
+            "pe_ratio":         _av_safe("TrailingPE"),
+            "forward_pe":       _av_safe("ForwardPE"),
+            "price_to_book":    _av_safe("PriceToBookRatio"),
+            "ev_to_ebitda":     _av_safe("EVToEBITDA"),
+            "market_cap":       _av_large("MarketCapitalization"),
+            "enterprise_value": _av_large("EVToEBITDA"),  # AV doesn't expose EV directly
+            "eps_ttm":          _av_safe("EPS"),
+            "eps_forward":      "N/A",
+            "revenue_ttm":      _av_large("RevenueTTM"),
+            "revenue_growth":   _av_pct("QuarterlyRevenueGrowthYOY"),
+            "earnings_growth":  _av_pct("QuarterlyEarningsGrowthYOY"),
+            "gross_margin":     _av_pct("GrossProfitTTM") if d.get("RevenueTTM","None") not in ("None","-",None) else "N/A",
+            "operating_margin": _av_pct("OperatingMarginTTM"),
+            "net_margin":       _av_pct("ProfitMargin"),
+            "total_cash":       "N/A",
+            "total_debt":       "N/A",
+            "free_cashflow":    "N/A",
+            "dividend_yield":   _av_pct("DividendYield"),
+            "beta":             _av_safe("Beta"),
+            "sector":           d.get("Sector", "N/A"),
+            "industry":         d.get("Industry", "N/A"),
+            "revenue_history":  [],
+            "fcf_history":      [],
+            "shares_outstanding": _av_safe("SharesOutstanding"),
+            "total_cash_raw":   0.0,
+            "total_debt_raw":   0.0,
+            "current_price_raw": _av_safe("50DayMovingAverage") or 0.0,
+            "company_name":     d.get("Name", ""),
+            "exchange":         d.get("Exchange", ""),
+        }
+    except Exception:
+        return {}
+
+
 def get_fundamentals(symbol, market):
-    """Fetch fundamentals via FMP API (primary) then Yahoo Finance fallbacks.
-    FMP works reliably from cloud IPs for US stocks; Yahoo Finance is used for Indian/non-US."""
+    """Fetch fundamentals: FMP (primary, US/EU), Alpha Vantage (fallback), Yahoo Finance (cloud-limited)."""
     if market in NON_EQUITY_MARKETS:
         return {}
 
-    # ── FMP doesn't cover NSE/BSE — skip it and go straight to Yahoo Finance ──
+    # ── FMP covers US, LSE, Frankfurt well. Skip for pure Yahoo markets. ──────
     YAHOO_ONLY_MARKETS = {"NSE", "BSE", "Tokyo", "HongKong", "Singapore"}
     if market not in YAHOO_ONLY_MARKETS:
-        # ── PRIMARY: FMP API — reliable from cloud IPs, uses API key (no scraping) ─
         fmp_data = _fetch_fmp_fundamentals(symbol, market)
         if fmp_data and fmp_data.get("market_cap") not in (None, "N/A"):
             return fmp_data
+
+    # ── Alpha Vantage — works from cloud IPs, covers US + some international ──
+    av_data = _fetch_alpha_vantage_overview(symbol)
+    if av_data and av_data.get("market_cap") not in (None, "N/A"):
+        return av_data
 
     # ── FALLBACK: Yahoo Finance v7/quote ─────────────────────────────────────
     v7 = _fetch_yahoo_v7_quote(symbol)

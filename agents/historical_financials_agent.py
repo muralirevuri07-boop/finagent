@@ -1,11 +1,10 @@
 """
 historical_financials_agent.py
-Fetches 10-year annual financial statements from Financial Modeling Prep (FMP).
+Fetches 10-year annual financial statements.
 
-Endpoints used (free tier, 250 req/day):
-  /income-statement/{symbol}?period=annual&limit=10
-  /balance-sheet-statement/{symbol}?period=annual&limit=10
-  /cash-flow-statement/{symbol}?period=annual&limit=10
+Primary: Financial Modeling Prep (FMP) — covers US + EU well on free tier.
+Fallback: Alpha Vantage INCOME_STATEMENT / BALANCE_SHEET / CASH_FLOW —
+          covers NSE/BSE and other international markets FMP free tier misses.
 
 Non-equity markets (Crypto/Forex/Commodity) are skipped — returns empty dict.
 """
@@ -15,6 +14,7 @@ import os
 import urllib.request
 import urllib.parse
 import json
+import requests
 from typing import Optional
 
 FMP_BASE = "https://financialmodelingprep.com/stable"
@@ -187,6 +187,7 @@ def historical_financials_agent(state: dict) -> dict:
     result = {
         "available":      True,
         "symbol":         sym,
+        "source":         "FMP",
         "years_available": len(income_table),
         "income_statement": income_table,
         "balance_sheet":    balance_table,
@@ -195,3 +196,175 @@ def historical_financials_agent(state: dict) -> dict:
     }
 
     return {**state, "historical_financials": result}
+
+
+# ── Alpha Vantage fallback for non-US markets ─────────────────────────────────
+
+def _av_get(function: str, symbol: str, api_key: str) -> list[dict]:
+    """Fetch annual reports from Alpha Vantage and return as list of annual rows."""
+    url = (
+        f"https://www.alphavantage.co/query"
+        f"?function={function}&symbol={symbol}&apikey={api_key}"
+    )
+    try:
+        r = requests.get(url, timeout=15)
+        d = r.json()
+        # AV wraps data in "annualReports"
+        return d.get("annualReports", [])
+    except Exception:
+        return []
+
+
+def _historical_financials_alpha_vantage(ticker: str, market: str) -> dict:
+    """
+    Fetch 10-year financials from Alpha Vantage for non-US / non-FMP markets.
+    AV symbol format: plain ticker for US, NSE:TICKER for NSE, BSE:TICKER for BSE, etc.
+    """
+    api_key = os.getenv("ALPHA_VANTAGE_API_KEY", "")
+    if not api_key:
+        return {"available": False, "reason": "No Alpha Vantage API key"}
+
+    # Build AV symbol
+    AV_PREFIX = {
+        "NSE": "NSE:", "BSE": "BSE:", "LSE": "",
+        "Tokyo": "", "HongKong": "", "Singapore": "",
+    }
+    base = ticker.split(".")[0] if "." in ticker else ticker
+    prefix = AV_PREFIX.get(market, "")
+    av_sym = f"{prefix}{base.upper()}"
+
+    income_raw   = _av_get("INCOME_STATEMENT",  av_sym, api_key)
+    balance_raw  = _av_get("BALANCE_SHEET",      av_sym, api_key)
+    cashflow_raw = _av_get("CASH_FLOW",          av_sym, api_key)
+
+    if not income_raw and not balance_raw and not cashflow_raw:
+        return {"available": False, "reason": f"No Alpha Vantage data for {av_sym}"}
+
+    def _s(row, *keys):
+        for k in keys:
+            v = row.get(k)
+            if v and v not in ("None", "-"):
+                try:
+                    return float(v)
+                except Exception:
+                    pass
+        return None
+
+    income_table = []
+    for row in income_raw[:10]:
+        year = row.get("fiscalDateEnding", "")[:4]
+        rev   = _s(row, "totalRevenue")
+        gp    = _s(row, "grossProfit")
+        oi    = _s(row, "operatingIncome", "ebit")
+        ni    = _s(row, "netIncome")
+        ebitda = _s(row, "ebitda")
+        income_table.append({
+            "year":             year,
+            "revenue":          _fmt_large(rev),
+            "gross_profit":     _fmt_large(gp),
+            "operating_income": _fmt_large(oi),
+            "net_income":       _fmt_large(ni),
+            "ebitda":           _fmt_large(ebitda),
+            "eps":              "N/A",
+            "gross_margin":     f"{gp/rev*100:.1f}%" if rev and gp else "N/A",
+            "op_margin":        f"{oi/rev*100:.1f}%" if rev and oi else "N/A",
+            "net_margin":       f"{ni/rev*100:.1f}%" if rev and ni else "N/A",
+            "_revenue_raw":     rev,
+            "_net_income_raw":  ni,
+        })
+
+    balance_table = []
+    for row in balance_raw[:10]:
+        year  = row.get("fiscalDateEnding", "")[:4]
+        ta    = _s(row, "totalAssets")
+        tl    = _s(row, "totalLiabilities")
+        eq    = _s(row, "totalShareholderEquity")
+        cash  = _s(row, "cashAndCashEquivalentsAtCarryingValue", "cashAndShortTermInvestments")
+        debt  = _s(row, "shortLongTermDebtTotal", "longTermDebtNoncurrent")
+        balance_table.append({
+            "year":              year,
+            "total_assets":      _fmt_large(ta),
+            "total_liabilities": _fmt_large(tl),
+            "total_equity":      _fmt_large(eq),
+            "cash":              _fmt_large(cash),
+            "total_debt":        _fmt_large(debt),
+            "net_debt":          _fmt_large((debt or 0) - (cash or 0)) if debt else "N/A",
+            "book_value_share":  "N/A",
+            "_equity_raw":       eq,
+            "_debt_raw":         debt,
+        })
+
+    cashflow_table = []
+    for row in cashflow_raw[:10]:
+        year  = row.get("fiscalDateEnding", "")[:4]
+        ocf   = _s(row, "operatingCashflow")
+        capex = _s(row, "capitalExpenditures")
+        fcf   = (ocf - abs(capex)) if ocf and capex else None
+        div   = _s(row, "dividendPayout")
+        cashflow_table.append({
+            "year":            year,
+            "operating_cf":    _fmt_large(ocf),
+            "capex":           _fmt_large(capex),
+            "free_cashflow":   _fmt_large(fcf),
+            "dividends_paid":  _fmt_large(div),
+            "share_buybacks":  "N/A",
+            "_fcf_raw":        fcf,
+            "_operating_cf_raw": ocf,
+        })
+
+    # Trends
+    trends = {}
+    if len(income_table) >= 2:
+        r0 = income_table[-1].get("_revenue_raw")
+        r1 = income_table[0].get("_revenue_raw")
+        if r0 and r1 and r0 > 0:
+            yrs = len(income_table) - 1
+            cagr = ((r1/r0)**(1/yrs) - 1)*100
+            trends["revenue_cagr"] = f"{cagr:+.1f}%"
+        ni0 = income_table[-1].get("_net_income_raw")
+        ni1 = income_table[0].get("_net_income_raw")
+        if ni0 and ni1:
+            trends["net_income_trend"] = "↑ Expanding" if ni1 > ni0 else "↓ Contracting"
+    if len(balance_table) >= 2:
+        d0 = balance_table[-1].get("_debt_raw")
+        d1 = balance_table[0].get("_debt_raw")
+        if d0 is not None and d1 is not None:
+            trends["debt_trend"] = "↑ Rising" if d1 > d0 else "↓ Falling"
+    if len(cashflow_table) >= 2:
+        f0 = cashflow_table[-1].get("_fcf_raw")
+        f1 = cashflow_table[0].get("_fcf_raw")
+        if f0 is not None and f1 is not None:
+            trends["fcf_trend"] = "↑ Improving" if f1 > f0 else "↓ Deteriorating"
+
+    return {
+        "available":        True,
+        "symbol":           av_sym,
+        "source":           "AlphaVantage",
+        "years_available":  len(income_table),
+        "income_statement": income_table,
+        "balance_sheet":    balance_table,
+        "cash_flow":        cashflow_table,
+        "trends":           trends,
+    }
+
+
+def historical_financials_agent_global(state: dict) -> dict:
+    """
+    Wrapper that tries FMP first, then Alpha Vantage for non-US markets.
+    Use this in the LangGraph pipeline instead of historical_financials_agent.
+    """
+    ticker = state.get("ticker", "")
+    market = state.get("market", "US")
+
+    if market in NON_EQUITY_MARKETS or not ticker:
+        return {**state, "historical_financials": {}}
+
+    # 1. Try FMP
+    fmp_state = historical_financials_agent(state)
+    fmp_result = fmp_state.get("historical_financials", {})
+    if fmp_result.get("available") and fmp_result.get("years_available", 0) > 0:
+        return fmp_state
+
+    # 2. Fallback to Alpha Vantage
+    av_result = _historical_financials_alpha_vantage(ticker, market)
+    return {**state, "historical_financials": av_result}
