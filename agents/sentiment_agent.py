@@ -1,10 +1,10 @@
-from langchain_groq import ChatGroq
+from agents.groq_client import get_groq_llm
 from langchain_core.messages import HumanMessage
 import os, json, re
 
 def sentiment_agent(state: dict) -> dict:
     try:
-        llm = ChatGroq(model="llama-3.1-8b-instant", api_key=os.getenv("GROQ_API_KEY"))
+        llm = get_groq_llm()
         # Truncate each article to 400 chars, take top 8 articles max
         articles = [str(a)[:400] for a in state["news"][:8]]
         news_text = "\n\n".join(articles)

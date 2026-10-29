@@ -1,5 +1,5 @@
 import requests
-from langchain_groq import ChatGroq
+from agents.groq_client import get_groq_llm
 from langchain_core.messages import HumanMessage
 import os, json, re
 
@@ -37,7 +37,7 @@ def portfolio_agent(state: dict) -> dict:
         data["shares"]     = h.get("shares", 0)
         stocks.append(data)
 
-    llm = ChatGroq(model="llama-3.1-8b-instant", api_key=os.getenv("GROQ_API_KEY"))
+    llm = get_groq_llm()
     prompt = f"""You are a portfolio manager. Analyse this portfolio and give recommendations.
 
 Portfolio: {json.dumps(stocks, indent=2)}

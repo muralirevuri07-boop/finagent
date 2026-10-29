@@ -17,7 +17,7 @@ import os
 import json
 from typing import List, Optional
 
-from langchain_groq import ChatGroq
+from agents.groq_client import get_groq_llm
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from agents.copilot.evidence_model import (
@@ -131,12 +131,7 @@ def synthesise(state: CopilotState) -> CopilotState:
         state.question, state.ticker, sources_text, calcs_text
     )
 
-    llm = ChatGroq(
-        api_key=groq_key,
-        model=MODEL,
-        temperature=TEMPERATURE,
-        max_tokens=MAX_TOKENS,
-    )
+    llm = get_groq_llm()
 
     try:
         response = llm.invoke([

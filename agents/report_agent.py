@@ -1,4 +1,4 @@
-from langchain_groq import ChatGroq
+from agents.groq_client import get_groq_llm
 from langchain_core.messages import HumanMessage
 from agents.valuation_engine import compute_valuation
 from agents.signal_scorer import compute_signal_score
@@ -62,7 +62,7 @@ Rules:
 - If valuation is unavailable, base recommendation on sentiment and fundamentals only"""
 
     try:
-        llm = ChatGroq(model="llama-3.1-8b-instant", api_key=os.getenv("GROQ_API_KEY"))
+        llm = get_groq_llm()
         response = llm.invoke([HumanMessage(content=prompt)])
         raw   = response.content
         raw   = re.sub(r"```(?:json)?\s*", "", raw).strip()

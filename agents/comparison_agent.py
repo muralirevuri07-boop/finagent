@@ -1,5 +1,5 @@
 import requests
-from langchain_groq import ChatGroq
+from agents.groq_client import get_groq_llm
 from langchain_core.messages import HumanMessage
 import os, json, re
 
@@ -38,7 +38,7 @@ def comparison_agent(state: dict) -> dict:
     
     stocks = [get_price_data(f"{t}{suffix}") for t in tickers]
     
-    llm = ChatGroq(model="llama-3.1-8b-instant", api_key=os.getenv("GROQ_API_KEY"))
+    llm = get_groq_llm()
     prompt = f"""You are a senior analyst. Compare these stocks and pick the best investment.
 
 Stocks data: {json.dumps(stocks, indent=2)}
