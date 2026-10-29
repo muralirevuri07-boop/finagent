@@ -136,6 +136,29 @@ def health():
     return {"status": "FinAgent Global running 🚀"}
 
 
+@app.get("/debug/av/{symbol}")
+def debug_av(symbol: str):
+    """Debug endpoint: test Alpha Vantage OVERVIEW for a symbol."""
+    import requests as req
+    api_key = os.getenv("ALPHA_VANTAGE_API_KEY", "NOT_SET")
+    url = f"https://www.alphavantage.co/query?function=OVERVIEW&symbol={symbol}&apikey={api_key}"
+    try:
+        r = req.get(url, timeout=12)
+        d = r.json()
+        return {
+            "symbol": symbol,
+            "api_key_set": api_key != "NOT_SET",
+            "api_key_prefix": api_key[:4] if api_key != "NOT_SET" else "N/A",
+            "response_keys": list(d.keys())[:10],
+            "has_symbol": "Symbol" in d,
+            "market_cap": d.get("MarketCapitalization", "MISSING"),
+            "name": d.get("Name", "MISSING"),
+            "raw_note": d.get("Note", d.get("Information", "none")),
+        }
+    except Exception as e:
+        return {"error": str(e), "api_key_set": api_key != "NOT_SET"}
+
+
 # ── AI Research Copilot ───────────────────────────────────────────────────────
 
 class ResearchAskRequest(BaseModel):
