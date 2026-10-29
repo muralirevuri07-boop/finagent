@@ -201,7 +201,11 @@ def historical_financials_agent(state: dict) -> dict:
 # ── Alpha Vantage fallback for non-US markets ─────────────────────────────────
 
 def _av_get(function: str, symbol: str, api_key: str) -> list[dict]:
-    """Fetch annual reports from Alpha Vantage and return as list of annual rows."""
+    """Fetch annual reports from Alpha Vantage with caching."""
+    from agents.av_cache import get as av_get, set as av_set
+    cached = av_get(symbol, function)
+    if cached is not None:
+        return cached
     url = (
         f"https://www.alphavantage.co/query"
         f"?function={function}&symbol={symbol}&apikey={api_key}"
@@ -209,8 +213,10 @@ def _av_get(function: str, symbol: str, api_key: str) -> list[dict]:
     try:
         r = requests.get(url, timeout=15)
         d = r.json()
-        # AV wraps data in "annualReports"
-        return d.get("annualReports", [])
+        rows = d.get("annualReports", [])
+        if rows:
+            av_set(symbol, function, rows)
+        return rows
     except Exception:
         return []
 

@@ -442,11 +442,18 @@ def _fetch_alpha_vantage_overview(symbol: str) -> dict:
     Covers US and some international stocks. Returns key fundamentals.
     Works reliably from cloud IPs (API key auth).
     """
+    from agents.av_cache import get as av_get, set as av_set
     api_key = os.getenv("ALPHA_VANTAGE_API_KEY", "")
     if not api_key:
         return {}
     # Alpha Vantage uses plain ticker for US; for NSE/BSE strip suffix
     av_sym = symbol.split(".")[0] if "." in symbol else symbol
+
+    # ── Cache check ───────────────────────────────────────────────────────────
+    cached = av_get(av_sym, "OVERVIEW")
+    if cached is not None:
+        return cached
+
     url = f"https://www.alphavantage.co/query?function=OVERVIEW&symbol={av_sym}&apikey={api_key}"
     try:
         r = requests.get(url, timeout=12)
@@ -509,6 +516,8 @@ def _fetch_alpha_vantage_overview(symbol: str) -> dict:
             "company_name":     d.get("Name", ""),
             "exchange":         d.get("Exchange", ""),
         }
+        av_set(av_sym, "OVERVIEW", result)
+        return result
     except Exception:
         return {}
 
