@@ -625,75 +625,59 @@ def get_fundamentals(symbol, market):
             "current_price_raw": float(v7.get("regularMarketPrice") or 0),
         }
 
-    # ── If direct API totally empty, fallback to yfinance ────────────────────
+    # ── yfinance fast_info fallback (uses v8/chart — works from cloud IPs) ──────
+    # fast_info gives market_cap + shares. t.info hits quoteSummary (blocked).
     if not price_mod and not fin_data_mod and not v7:
         try:
             t = yf.Ticker(symbol)
-            info = t.fast_info if hasattr(t, "fast_info") else {}
-            full_info = {}
-            try:
-                full_info = t.info or {}
-            except Exception:
-                pass
-            info_dict = dict(full_info) if full_info else {}
+            fi = t.fast_info if hasattr(t, "fast_info") else None
 
-            if not info_dict:
-                return {}
+            def _fi(attr):
+                try:
+                    v = getattr(fi, attr, None) if fi else None
+                    return v if v and str(v) not in ("nan", "None") else None
+                except Exception:
+                    return None
 
-            # Build rev/fcf from yfinance as last resort
-            try:
-                fin = t.financials
-                rev_s = None if fin is None or fin.empty else fin.loc["Total Revenue"].dropna() if "Total Revenue" in fin.index else None
-                if rev_s is not None:
-                    for date, val in rev_s.items():
-                        yr = date.year if hasattr(date, "year") else int(str(date)[:4])
-                        rev_history.append({"year": yr, "revenue": _fmt_large(val), "raw": float(val)})
-                    rev_history = sorted(rev_history, key=lambda x: x["year"])
-            except Exception:
-                pass
+            mkt_cap = _fi("market_cap")
+            shares  = _fi("shares")
+            price   = _fi("last_price")
 
-            try:
-                cf = t.cashflow
-                fcf_s = None if cf is None or cf.empty else cf.loc["Free Cash Flow"].dropna() if "Free Cash Flow" in cf.index else None
-                if fcf_s is not None:
-                    for date, val in fcf_s.items():
-                        yr = date.year if hasattr(date, "year") else int(str(date)[:4])
-                        fcf_history.append({"year": yr, "fcf": _fmt_large(val), "raw": float(val)})
-                    fcf_history = sorted(fcf_history, key=lambda x: x["year"])
-            except Exception:
-                pass
-
-            return {
-                "pe_ratio":         _safe(info_dict.get("trailingPE")),
-                "forward_pe":       _safe(info_dict.get("forwardPE")),
-                "price_to_book":    _safe(info_dict.get("priceToBook")),
-                "ev_to_ebitda":     _safe(info_dict.get("enterpriseToEbitda")),
-                "market_cap":       _fmt_large(info_dict.get("marketCap")),
-                "enterprise_value": _fmt_large(info_dict.get("enterpriseValue")),
-                "eps_ttm":          _safe(info_dict.get("trailingEps")),
-                "eps_forward":      _safe(info_dict.get("forwardEps")),
-                "revenue_ttm":      _fmt_large(info_dict.get("totalRevenue")),
-                "revenue_growth":   f"{round(info_dict.get('revenueGrowth',0)*100,1)}%" if info_dict.get("revenueGrowth") is not None else "N/A",
-                "earnings_growth":  f"{round(info_dict.get('earningsGrowth',0)*100,1)}%" if info_dict.get("earningsGrowth") is not None else "N/A",
-                "gross_margin":     f"{round(info_dict.get('grossMargins',0)*100,1)}%" if info_dict.get("grossMargins") is not None else "N/A",
-                "operating_margin": f"{round(info_dict.get('operatingMargins',0)*100,1)}%" if info_dict.get("operatingMargins") is not None else "N/A",
-                "net_margin":       f"{round(info_dict.get('profitMargins',0)*100,1)}%" if info_dict.get("profitMargins") is not None else "N/A",
-                "total_cash":       _fmt_large(info_dict.get("totalCash")),
-                "total_debt":       _fmt_large(info_dict.get("totalDebt")),
-                "free_cashflow":    _fmt_large(info_dict.get("freeCashflow")),
-                "dividend_yield":   f"{round(info_dict.get('dividendYield',0)*100,2)}%" if info_dict.get("dividendYield") else "N/A",
-                "beta":             _safe(info_dict.get("beta")),
-                "sector":           info_dict.get("sector", "N/A"),
-                "industry":         info_dict.get("industry", "N/A"),
-                "revenue_history":  rev_history,
-                "fcf_history":      fcf_history,
-                "shares_outstanding": _safe(info_dict.get("sharesOutstanding"), 0),
-                "total_cash_raw":   float(info_dict.get("totalCash") or 0),
-                "total_debt_raw":   float(info_dict.get("totalDebt") or 0),
-                "current_price_raw": float(info_dict.get("currentPrice") or 0),
-            }
-        except Exception as e:
-            return {"fundamentals_error": str(e)}
+            # fast_info gives market cap — return partial fundamentals
+            if mkt_cap:
+                return {
+                    "pe_ratio":         "N/A",
+                    "forward_pe":       "N/A",
+                    "price_to_book":    "N/A",
+                    "ev_to_ebitda":     "N/A",
+                    "market_cap":       _fmt_large(mkt_cap),
+                    "enterprise_value": "N/A",
+                    "eps_ttm":          "N/A",
+                    "eps_forward":      "N/A",
+                    "revenue_ttm":      "N/A",
+                    "revenue_growth":   "N/A",
+                    "earnings_growth":  "N/A",
+                    "gross_margin":     "N/A",
+                    "operating_margin": "N/A",
+                    "net_margin":       "N/A",
+                    "total_cash":       "N/A",
+                    "total_debt":       "N/A",
+                    "free_cashflow":    "N/A",
+                    "dividend_yield":   "N/A",
+                    "beta":             "N/A",
+                    "sector":           "N/A",
+                    "industry":         "N/A",
+                    "revenue_history":  [],
+                    "fcf_history":      [],
+                    "shares_outstanding": float(shares or 0),
+                    "total_cash_raw":   0.0,
+                    "total_debt_raw":   0.0,
+                    "current_price_raw": float(price or 0),
+                }
+            # fast_info returned nothing — give up
+            return {}
+        except Exception:
+            return {}
 
     # ── Extract from quoteSummary + v7 merged ────────────────────────────────
     def pct(mod, key):
