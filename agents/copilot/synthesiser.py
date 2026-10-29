@@ -26,7 +26,7 @@ from agents.copilot.evidence_model import (
 
 # ── constants ─────────────────────────────────────────────────────────────────
 
-MODEL = "llama-3.3-70b-versatile"
+MODEL = "llama3-70b-8192"
 MAX_TOKENS = 2048
 TEMPERATURE = 0.1   # Low — factual synthesis
 

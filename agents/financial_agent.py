@@ -438,14 +438,17 @@ def _fetch_fmp_fundamentals(symbol: str, market: str) -> dict:
 
 def get_fundamentals(symbol, market):
     """Fetch fundamentals via FMP API (primary) then Yahoo Finance fallbacks.
-    FMP works reliably from cloud IPs; Yahoo Finance often blocks datacenter IPs."""
+    FMP works reliably from cloud IPs for US stocks; Yahoo Finance is used for Indian/non-US."""
     if market in NON_EQUITY_MARKETS:
         return {}
 
-    # ── PRIMARY: FMP API — reliable from cloud IPs, uses API key (no scraping) ─
-    fmp_data = _fetch_fmp_fundamentals(symbol, market)
-    if fmp_data and fmp_data.get("market_cap") not in (None, "N/A"):
-        return fmp_data
+    # ── FMP doesn't cover NSE/BSE — skip it and go straight to Yahoo Finance ──
+    YAHOO_ONLY_MARKETS = {"NSE", "BSE", "Tokyo", "HongKong", "Singapore"}
+    if market not in YAHOO_ONLY_MARKETS:
+        # ── PRIMARY: FMP API — reliable from cloud IPs, uses API key (no scraping) ─
+        fmp_data = _fetch_fmp_fundamentals(symbol, market)
+        if fmp_data and fmp_data.get("market_cap") not in (None, "N/A"):
+            return fmp_data
 
     # ── FALLBACK: Yahoo Finance v7/quote ─────────────────────────────────────
     v7 = _fetch_yahoo_v7_quote(symbol)
